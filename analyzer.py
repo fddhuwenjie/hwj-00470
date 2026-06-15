@@ -66,9 +66,10 @@ def fft(samples):
     power = 1
     while power < n:
         power <<= 1
-
-    padded = list(samples) + [0.0] * (power - n)
     N = power
+
+    real = list(samples) + [0.0] * (N - n)
+    imag = [0.0] * N
 
     j = 0
     for i in range(1, N):
@@ -78,7 +79,8 @@ def fft(samples):
             bit >>= 1
         j |= bit
         if i < j:
-            padded[i], padded[j] = padded[j], padded[i]
+            real[i], real[j] = real[j], real[i]
+            imag[i], imag[j] = imag[j], imag[i]
 
     size = 2
     while size <= N:
@@ -94,21 +96,20 @@ def fft(samples):
                 even_idx = i + k
                 odd_idx = i + k + half_size
 
-                odd_real = padded[odd_idx] * w_real
-                odd_imag = padded[odd_idx] * w_imag if False else 0.0
+                t_real = real[odd_idx] * w_real - imag[odd_idx] * w_imag
+                t_imag = real[odd_idx] * w_imag + imag[odd_idx] * w_real
 
-                t_real = odd_real
-                padded[odd_idx] = padded[even_idx] - t_real
-                padded[even_idx] = padded[even_idx] + t_real
+                real[odd_idx] = real[even_idx] - t_real
+                imag[odd_idx] = imag[even_idx] - t_imag
+                real[even_idx] = real[even_idx] + t_real
+                imag[even_idx] = imag[even_idx] + t_imag
 
                 angle += angle_step
         size <<= 1
 
     magnitudes = []
     for i in range(N // 2):
-        real = padded[i]
-        imag = 0.0
-        mag = math.sqrt(real * real + imag * imag)
+        mag = math.sqrt(real[i] * real[i] + imag[i] * imag[i])
         magnitudes.append(mag)
 
     return magnitudes
@@ -128,9 +129,10 @@ def spectrum_analysis(samples, sample_rate=SAMPLE_RATE, top_n=10):
     power = 1
     while power < N:
         power <<= 1
-
-    padded = list(windowed) + [0.0] * (power - N)
     M = power
+
+    real = list(windowed) + [0.0] * (M - N)
+    imag = [0.0] * M
 
     j = 0
     for i in range(1, M):
@@ -140,7 +142,8 @@ def spectrum_analysis(samples, sample_rate=SAMPLE_RATE, top_n=10):
             bit >>= 1
         j |= bit
         if i < j:
-            padded[i], padded[j] = padded[j], padded[i]
+            real[i], real[j] = real[j], real[i]
+            imag[i], imag[j] = imag[j], imag[i]
 
     size = 2
     while size <= M:
@@ -156,18 +159,20 @@ def spectrum_analysis(samples, sample_rate=SAMPLE_RATE, top_n=10):
                 even_idx = i + k
                 odd_idx = i + k + half_size
 
-                odd_val = padded[odd_idx]
-                t_real = odd_val * w_real
+                t_real = real[odd_idx] * w_real - imag[odd_idx] * w_imag
+                t_imag = real[odd_idx] * w_imag + imag[odd_idx] * w_real
 
-                padded[odd_idx] = padded[even_idx] - t_real
-                padded[even_idx] = padded[even_idx] + t_real
+                real[odd_idx] = real[even_idx] - t_real
+                imag[odd_idx] = imag[even_idx] - t_imag
+                real[even_idx] = real[even_idx] + t_real
+                imag[even_idx] = imag[even_idx] + t_imag
 
                 angle += angle_step
         size <<= 1
 
     freqs = []
     for i in range(M // 2):
-        mag = abs(padded[i])
+        mag = math.sqrt(real[i] * real[i] + imag[i] * imag[i])
         freq = i * sample_rate / M
         freqs.append((freq, mag))
 
