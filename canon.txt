@@ -1,0 +1,6 @@
+# 卡农片段 - 三轨编曲 (D大调)
+# Canon in D - Pachelbel
+
+name=Melody, wave=sine, vol=0.75, pan=-0.4 | bpm=72 o5 f#4 e4 d4 c#4 b4 a4 g4 f#4 e4 d4 c#4 b4 a4 g4 f#4 e4 d4 c#4 b4 a4 b4 c#4 d4 e4 f#4 g4 a4 b4 a4 g4 f#4 e4 d4 c#4 b4 a4 g4 f#4 e4 d4 c#4 b4 a4 g4 f#4 e4 d4
+name=Harmony, wave=triangle, vol=0.5, pan=0.0 | o4 d a b f# g d g a d a b f# g d g a d a b f# g d g a d a b f# g d g a
+name=Bass, wave=sawtooth, vol=0.4, pan=0.4 | o2 d a b, f#, g d g a d a b, f#, g d g a d a b, f#, g d g a d a b, f#, g d g a
