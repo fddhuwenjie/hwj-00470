@@ -101,6 +101,19 @@ def apply_gain(samples, gain):
     return [s * gain for s in samples]
 
 
+def apply_distortion(samples, gain=2.0, threshold=0.8, sample_rate=SAMPLE_RATE):
+    result = []
+    for s in samples:
+        s *= gain
+        if s > threshold:
+            s = threshold
+        elif s < -threshold:
+            s = -threshold
+        s /= max(threshold, 1.0)
+        result.append(s)
+    return result
+
+
 def apply_pan(samples, pan):
     pan = max(-1.0, min(1.0, pan))
     left_gain = math.sqrt((1.0 - pan) / 2.0)

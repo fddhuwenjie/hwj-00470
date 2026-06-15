@@ -5,24 +5,34 @@ from notes import (
     get_note_duration, parse_duration_suffix,
     get_dynamics_volume
 )
+from chord import (
+    ChordEvent, parse_bracket_chord, chord_from_name,
+    chord_to_midi_notes, chord_to_frequencies
+)
 
 
 class NoteEvent:
-    def __init__(self, frequency=0.0, duration=1.0, midi_note=None, volume=0.7, tied=False, is_rest=False):
+    def __init__(self, frequency=0.0, duration=1.0, midi_note=None, volume=0.7,
+                 tied=False, is_rest=False, instrument=None, is_chord=False,
+                 chord_event=None):
         self.frequency = frequency
         self.duration = duration
         self.midi_note = midi_note
         self.volume = volume
         self.tied = tied
         self.is_rest = is_rest
+        self.instrument = instrument
+        self.is_chord = is_chord
+        self.chord_event = chord_event
 
 
 class TrackData:
-    def __init__(self, name="Track", wave_type="sine", volume=0.8, pan=0.0):
+    def __init__(self, name="Track", wave_type="sine", volume=0.8, pan=0.0, instrument=None):
         self.name = name
         self.wave_type = wave_type
         self.volume = volume
         self.pan = pan
+        self.instrument = instrument
         self.events = []
 
 
@@ -74,8 +84,58 @@ def _tokenize(text):
     if not text:
         return []
 
-    pattern = r'\[\:|\:\]|×\d+|\*\d+|[^\s]+'
-    tokens = re.findall(pattern, text)
+    tokens = []
+    i = 0
+    n = len(text)
+    while i < n:
+        ch = text[i]
+
+        if ch == ' ' or ch == '\t':
+            i += 1
+            continue
+
+        if text[i:i+2] == '[:' or text[i:i+2] == ':]':
+            tokens.append(text[i:i+2])
+            i += 2
+            continue
+
+        if ch == '[':
+            j = i + 1
+            depth = 1
+            while j < n and depth > 0:
+                if text[j] == '[':
+                    depth += 1
+                elif text[j] == ']':
+                    depth -= 1
+                    if depth == 0:
+                        break
+                j += 1
+            tokens.append(text[i:j+1])
+            i = j + 1
+            continue
+
+        if ch == '@':
+            j = i + 1
+            while j < n and text[j] not in (' ', '\t'):
+                j += 1
+            tokens.append(text[i:j])
+            i = j
+            continue
+
+        if ch == '×' or ch == '*':
+            j = i + 1
+            while j < n and text[j].isdigit():
+                j += 1
+            tokens.append(text[i:j])
+            i = j
+            continue
+
+        j = i
+        while j < n and text[j] not in (' ', '\t'):
+            j += 1
+        tokens.append(text[i:j])
+        i = j
+
     return tokens
 
 
@@ -108,11 +168,17 @@ def parse_track_line(line, default_bpm=120):
                     track.pan = float(hp.split('=', 1)[1])
                 except ValueError:
                     pass
+            elif hp_lower.startswith('inst=') or hp_lower.startswith('instrument=') or hp_lower.startswith('i='):
+                track.instrument = hp.split('=', 1)[1].strip()
 
     bpm = default_bpm
     current_volume = 0.7
     current_octave = 4
     current_duration = 'quarter'
+    current_instrument = track.instrument
+    current_arpeggio = False
+    current_arpeggio_pattern = 'up'
+    current_arpeggio_speed = 1.0
 
     tokens = _tokenize(content)
     tokens = _expand_loops(tokens)
@@ -147,15 +213,59 @@ def parse_track_line(line, default_bpm=120):
             i += 1
             continue
 
+        if tok.startswith('@'):
+            inst_name = tok[1:].strip()
+            if inst_name:
+                current_instrument = inst_name
+            i += 1
+            continue
+
+        if tok_lower.startswith('arp') or tok_lower.startswith('arpeggio'):
+            if tok_lower in ('arpoff', 'arpeggiooff', 'arp:off', 'arpeggio:off'):
+                current_arpeggio = False
+            else:
+                current_arpeggio = True
+                pattern_match = re.match(r'(?:arp|arpeggio)[:=]?(up|down|alternate)?(?:[:,](\d*\.?\d+))?', tok_lower)
+                if pattern_match:
+                    if pattern_match.group(1):
+                        current_arpeggio_pattern = pattern_match.group(1)
+                    if pattern_match.group(2):
+                        try:
+                            current_arpeggio_speed = float(pattern_match.group(2))
+                        except ValueError:
+                            pass
+            i += 1
+            continue
+
         is_rest = False
         frequency = 0.0
         midi_note = None
         duration = current_duration
         tied = False
+        is_chord = False
+        chord_event = None
+        chord_frequencies = []
+        chord_midis = []
 
         if tok_lower == 'r' or tok == '0':
             is_rest = True
-        elif tok[0].isdigit():
+        elif tok.startswith('[') and tok.endswith(']') and not tok.startswith('[:'):
+            chord_frequencies, chord_midis = parse_bracket_chord(tok, current_octave)
+            if chord_frequencies:
+                is_chord = True
+                chord_event = ChordEvent(
+                    frequencies=chord_frequencies,
+                    midi_notes=chord_midis,
+                    duration=get_note_duration(current_duration, bpm),
+                    volume=current_volume,
+                    arpeggio=current_arpeggio,
+                    arpeggio_pattern=current_arpeggio_pattern,
+                    arpeggio_speed=current_arpeggio_speed
+                )
+            else:
+                i += 1
+                continue
+        elif tok[0].isdigit() and not (tok.startswith('[') or tok.startswith(']')):
             m = re.match(r'^([1-7])([.,#b]*)(\d*\.?)(-?)$', tok)
             if m:
                 jianpu_note = m.group(1)
@@ -174,14 +284,59 @@ def parse_track_line(line, default_bpm=120):
             else:
                 i += 1
                 continue
-        elif tok[0].isalpha():
-            m = re.match(r'^([A-Ga-g])([#b]?)(\d?)(\d*\.?)(-?)$', tok)
-            if m:
-                note_letter = m.group(1).upper()
-                accidental = m.group(2)
-                octave_suffix = m.group(3)
-                dur_suffix = m.group(4)
-                tie_marker = m.group(5)
+        elif tok[0].isalpha() and not tok.startswith('@'):
+            m_chord = re.match(
+                r'^([A-Ga-g])([#b]?)((?:maj|min|dim|aug|sus|add|dom|half-dim|mM|m|M|-|\+)?(?:\d)?(?:7|9|b5)?(?:maj|min|dim|aug|sus|add)?\d*)(\d*\.?)(-?)$',
+                tok
+            )
+            m_note = re.match(r'^([A-Ga-g])([#b]?)(\d?)(\d*\.?)(-?)$', tok)
+
+            if m_chord:
+                note_letter = m_chord.group(1).upper()
+                accidental = m_chord.group(2)
+                quality = m_chord.group(3)
+                dur_suffix = m_chord.group(4)
+                tie_marker = m_chord.group(5)
+
+                if quality:
+                    chord_name = note_letter + accidental + quality
+                    chord_midis = chord_to_midi_notes(chord_name, current_octave)
+                    chord_frequencies = chord_to_frequencies(chord_name, current_octave)
+                    if chord_midis:
+                        is_chord = True
+                        if dur_suffix:
+                            chord_duration = get_note_duration(parse_duration_suffix(dur_suffix), bpm)
+                        else:
+                            chord_duration = get_note_duration(current_duration, bpm)
+
+                        chord_event = ChordEvent(
+                            frequencies=chord_frequencies,
+                            midi_notes=chord_midis,
+                            duration=chord_duration,
+                            volume=current_volume,
+                            arpeggio=current_arpeggio,
+                            arpeggio_pattern=current_arpeggio_pattern,
+                            arpeggio_speed=current_arpeggio_speed
+                        )
+                    else:
+                        i += 1
+                        continue
+                else:
+                    note_str = note_letter + accidental + str(current_octave)
+                    frequency = note_name_to_frequency(note_str)
+                    midi_note = note_name_to_midi(note_str)
+
+                    if dur_suffix:
+                        duration = parse_duration_suffix(dur_suffix)
+                    if tie_marker == '-':
+                        tied = True
+
+            elif m_note:
+                note_letter = m_note.group(1).upper()
+                accidental = m_note.group(2)
+                octave_suffix = m_note.group(3)
+                dur_suffix = m_note.group(4)
+                tie_marker = m_note.group(5)
 
                 note_str = note_letter + accidental
                 if octave_suffix:
@@ -205,14 +360,30 @@ def parse_track_line(line, default_bpm=120):
 
         dur_seconds = get_note_duration(duration, bpm)
 
-        event = NoteEvent(
-            frequency=frequency,
-            duration=dur_seconds,
-            midi_note=midi_note,
-            volume=current_volume,
-            tied=tied,
-            is_rest=is_rest
-        )
+        if is_chord and chord_event is not None:
+            event = NoteEvent(
+                frequency=chord_frequencies[0] if chord_frequencies else 0.0,
+                duration=chord_event.duration,
+                midi_note=chord_midis[0] if chord_midis else None,
+                volume=current_volume,
+                tied=False,
+                is_rest=False,
+                instrument=current_instrument,
+                is_chord=True,
+                chord_event=chord_event
+            )
+        else:
+            event = NoteEvent(
+                frequency=frequency,
+                duration=dur_seconds,
+                midi_note=midi_note,
+                volume=current_volume,
+                tied=tied,
+                is_rest=is_rest,
+                instrument=current_instrument,
+                is_chord=False,
+                chord_event=None
+            )
         track.events.append(event)
         i += 1
 
@@ -239,7 +410,7 @@ def merge_tied_notes(events):
     i = 0
     while i < len(events):
         ev = events[i]
-        if ev.tied and not ev.is_rest and i + 1 < len(events):
+        if ev.tied and not ev.is_rest and not ev.is_chord and i + 1 < len(events):
             next_ev = events[i + 1]
             if next_ev.midi_note == ev.midi_note:
                 merged = NoteEvent(
@@ -248,7 +419,10 @@ def merge_tied_notes(events):
                     midi_note=ev.midi_note,
                     volume=ev.volume,
                     tied=False,
-                    is_rest=False
+                    is_rest=False,
+                    instrument=ev.instrument,
+                    is_chord=False,
+                    chord_event=None
                 )
                 result.append(merged)
                 i += 2
